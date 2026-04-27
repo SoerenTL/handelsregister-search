@@ -228,11 +228,6 @@ The Handelsregister portal enforces a limit of **60 requests per hour** per the 
 - **"Another search is in progress"** — the server handles one request at a time. Wait a moment and try again.
 - **No AD document found** — not all companies have an AD document available on the portal.
 - **Form errors / timeouts** — the site structure may change. Check for updates to this package.
-## Development
- 
-```bash
-npm test
-```
  
 ## License
  
