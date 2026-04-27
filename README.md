@@ -7,6 +7,54 @@ Inspired by [bundesAPI/handelsregister](https://github.com/bundesAPI/handelsregi
 ---
  
 ## Web UI — Step by step / Schritt für Schritt
+
+### Deutsch
+ 
+**1. Abhängigkeiten installieren**
+ 
+```bash
+npm install
+npx playwright install chromium
+npm install express
+```
+ 
+**2. Server starten**
+ 
+```bash
+node server.js
+```
+ 
+Es erscheint:
+```
+  Handelsregister UI ready →  http://localhost:3000
+```
+ 
+**3. Browser öffnen**
+ 
+Adresse [http://localhost:3000](http://localhost:3000) aufrufen.
+ 
+**4. Unternehmen suchen**
+ 
+Den Firmennamen in das Suchfeld eingeben.  
+Bei Bedarf den Suchmodus anpassen:
+- **All keywords** — Ergebnisse enthalten alle eingegebenen Wörter (Standard)
+- **Any keyword** — Ergebnisse enthalten mindestens ein Wort
+- **Exact name** — Ergebnisse entsprechen genau dem eingegebenen Namen
+Auf **Search** klicken. Die Suche dauert 10–20 Sekunden, da das Portal langsam reagiert.
+ 
+**5. Unternehmen auswählen**
+ 
+Wenn mehrere Ergebnisse erscheinen, das gewünschte Unternehmen anklicken. Es wird hervorgehoben.
+ 
+**6. AD-PDF herunterladen**
+ 
+Auf **Download AD PDF** klicken. Der Browser speichert die Datei automatisch.  
+Der Dateiname orientiert sich am Firmennamen
+ 
+**7. Server beenden**
+ 
+Im Terminal `Ctrl+C` drücken.
+ 
  
 ### English
  
@@ -35,7 +83,7 @@ Go to [http://localhost:3000](http://localhost:3000)
  
 **4. Search for a company**
  
-Type a company name into the search field, for example `ISLogic` or `Deutsche Bahn`.  
+Type a company name into the search field.  
 Choose a search mode if needed:
 - **All keywords** — results must contain every word you typed (default)
 - **Any keyword** — results contain at least one word
@@ -49,7 +97,7 @@ If multiple results appear, click the one you want. It will be highlighted.
 **6. Download the AD PDF**
  
 Click **Download AD PDF**. Your browser will save the file automatically.  
-The filename is based on the company name, for example `ISLogic_Aktiengesellschaft_AD.pdf`.
+The filename is based on the company name`.
  
 **7. Stop the server**
  
@@ -57,53 +105,7 @@ Press `Ctrl+C` in the terminal.
  
 ---
  
-### Deutsch
- 
-**1. Abhängigkeiten installieren**
- 
-```bash
-npm install
-npx playwright install chromium
-npm install express
-```
- 
-**2. Server starten**
- 
-```bash
-node server.js
-```
- 
-Es erscheint:
-```
-  Handelsregister UI ready →  http://localhost:3000
-```
- 
-**3. Browser öffnen**
- 
-Adresse [http://localhost:3000](http://localhost:3000) aufrufen.
- 
-**4. Unternehmen suchen**
- 
-Den Firmennamen in das Suchfeld eingeben, z. B. `ISLogic` oder `Deutsche Bahn`.  
-Bei Bedarf den Suchmodus anpassen:
-- **All keywords** — Ergebnisse enthalten alle eingegebenen Wörter (Standard)
-- **Any keyword** — Ergebnisse enthalten mindestens ein Wort
-- **Exact name** — Ergebnisse entsprechen genau dem eingegebenen Namen
-Auf **Search** klicken. Die Suche dauert 10–20 Sekunden, da das Portal langsam reagiert.
- 
-**5. Unternehmen auswählen**
- 
-Wenn mehrere Ergebnisse erscheinen, das gewünschte Unternehmen anklicken. Es wird hervorgehoben.
- 
-**6. AD-PDF herunterladen**
- 
-Auf **Download AD PDF** klicken. Der Browser speichert die Datei automatisch.  
-Der Dateiname orientiert sich am Firmennamen, z. B. `ISLogic_Aktiengesellschaft_AD.pdf`.
- 
-**7. Server beenden**
- 
-Im Terminal `Ctrl+C` drücken.
- 
+
 ---
  
 ## CLI Usage
