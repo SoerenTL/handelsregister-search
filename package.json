@@ -1,0 +1,35 @@
+{
+  "name": "handelsregisterdownloader",
+  "version": "0.2.0",
+  "description": "Handelsregister AD Downloader",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "handelsregister": "src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "search": "node src/index.js search",
+    "announcements": "node src/index.js announcements"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "handelsregister",
+    "deutschland",
+    "company-registry",
+    "bundesapi",
+    "handelsregister-js"
+  ],
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "commander": "^14.0.3",
+    "express": "^5.2.1",
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}
