@@ -1,345 +1,255 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Handelsregister AD Downloader</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+#!/usr/bin/env node
+/**
+ * server.js  –  Handelsregister AD-Downloader
+ *
+ * Endpoints:
+ *   POST /search        → returns company list as JSON
+ *   POST /download      → streams PDF to browser
+ *   POST /download-pdf  → returns PDF as base64 JSON (used by PCF)
+ *
+ * Session strategy:
+ *   The Playwright browser session is created on the first request and reused
+ *   for all subsequent ones. If the session has gone stale (portal timeout,
+ *   browser crash, long idle), the error is caught automatically, the session
+ *   is reset, and the request is retried once with a fresh browser — transparent
+ *   to the user.
+ *
+ * Start:  node server.js
+ */
 
-  body {
-    font-family: 'IBM Plex Sans', sans-serif;
-    background: #fff;
-    color: #111;
-    font-size: 14px;
-    line-height: 1.5;
+import https from 'https';
+import fs from 'fs'
+ 
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import os from 'os';
+import { HandelsregisterClient } from './src/client.js';
+import { downloadADPdf } from './src/downloader.js';
+ 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PORT = process.env.PORT ?? 3000;
+ 
+// ── session ───────────────────────────────────────────────────────────────────
+ 
+let client = null;
+let busy = false;
+ 
+async function getClient() {
+  if (!client) {
+    console.log('[session] Starting browser session...');
+    client = new HandelsregisterClient({ debug: false });
+    await client.openStartpage();
+    console.log('[session] Ready.');
   }
-
-  header {
-    border-bottom: 1px solid #e0e0e0;
-    padding: 20px 32px;
+  return client;
+}
+ 
+async function resetClient() {
+  if (client) {
+    try { await client.close(); } catch { }
+    client = null;
+    console.log('[session] Session closed.');
   }
-  header h1 {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 14px;
-    font-weight: 500;
+}
+ 
+/**
+ * Run fn(). If it throws a stale-session error, reset the browser and run
+ * fn() once more with a fresh session. Any other error is rethrown immediately.
+ */
+async function withAutoRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    const stale =
+      err.message?.includes('Target page, context or browser has been closed') ||
+      err.message?.includes('Navigation failed') ||
+      err.message?.includes('net::ERR') ||
+      err.message?.includes('Session closed') ||
+      err.message?.includes('Protocol error') ||
+      err.message?.includes('page has been closed') ||
+      err.message?.includes('Timeout') ||
+      err.message?.includes('timeout');
+ 
+    if (stale) {
+      console.log('[session] Stale session — resetting and retrying...');
+      await resetClient();
+      return await fn();   // one retry with a fresh browser
+    }
+ 
+    throw err;
   }
-  header p { font-size: 12px; color: #888; margin-top: 2px; }
-
-  main {
-    max-width: 640px;
-    margin: 0 auto;
-    padding: 40px 32px 80px;
-  }
-
-  .search-group {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  input[type="text"] {
-    flex: 1 1 240px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
-    padding: 9px 12px;
-    border: 1px solid #ccc;
-    background: #fff;
-    color: #111;
-    outline: none;
-    border-radius: 0;
-  }
-  input[type="text"]:focus { border-color: #111; }
-  input[type="text"]::placeholder { color: #bbb; }
-
-  select {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-    padding: 9px 10px;
-    border: 1px solid #ccc;
-    background: #fff;
-    color: #111;
-    cursor: pointer;
-    outline: none;
-    border-radius: 0;
-  }
-  select:focus { border-color: #111; }
-
-  button {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 9px 18px;
-    border: 1px solid #111;
-    background: #111;
-    color: #fff;
-    cursor: pointer;
-    border-radius: 0;
-    transition: background 0.1s;
-  }
-  button:hover { background: #333; border-color: #333; }
-  button:disabled { background: #ccc; border-color: #ccc; cursor: not-allowed; }
-
-  .status {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-    color: #888;
-    min-height: 20px;
-    margin-top: 10px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .status.loading { color: #555; }
-  .status.error   { color: #c00; }
-  .status.ok      { color: #060; }
-
-  .spinner {
-    width: 12px; height: 12px;
-    border: 1.5px solid #ccc;
-    border-top-color: #111;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    flex-shrink: 0;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  hr {
-    border: none;
-    border-top: 1px solid #e0e0e0;
-    margin: 28px 0;
-  }
-
-  #results { display: none; }
-  #results.visible { display: block; }
-
-  .section-label {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 11px;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 10px;
-  }
-
-  .company-row {
-    border: 1px solid #e0e0e0;
-    border-top: none;
-    padding: 14px 16px;
-    cursor: pointer;
-    background: #fff;
-    position: relative;
-    transition: background 0.08s;
-  }
-  .company-row:first-of-type { border-top: 1px solid #e0e0e0; }
-  .company-row:hover { background: #f5f5f5; }
-  .company-row.downloading {
-    background: #f5f5f5;
-    border-left: 2px solid #111;
-    padding-left: 14px;
-    cursor: wait;
-  }
-
-  .co-name { font-weight: 500; margin-bottom: 3px; }
-  .co-detail {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 11px;
-    color: #888;
-    line-height: 1.7;
-  }
-  .co-num {
-    position: absolute;
-    top: 14px; right: 14px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 11px;
-    color: #ccc;
-  }
-  .co-hint {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 11px;
-    color: #aaa;
-    margin-top: 4px;
-  }
-</style>
-</head>
-<body>
-
-<header>
-  <h1>Handelsregister AD Downloader</h1>
-  <p>Download Aktueller Ausdruck (AD) as PDF</p>
-</header>
-
-<main>
-
-  <div class="search-group">
-    <input type="text" id="q"
-      placeholder="Firmenname"
-      autocomplete="off" spellcheck="false">
-    <select id="mode">
-      <option value="all">All keywords</option>
-      <option value="min">Any keyword</option>
-      <option value="exact">Exact name</option>
-    </select>
-    <button id="searchBtn" onclick="doSearch()">Suche</button>
-  </div>
-
-  <div class="status" id="status"></div>
-
-  <div id="results">
-    <hr>
-    <div class="section-label" id="resultsLabel"></div>
-    <div id="companyList"></div>
-  </div>
-
-</main>
-
-<script>
-  let lastKeywords = '';
-  let lastMode = 'all';
-  let companies = [];
-  let busy = false;
-
-  document.getElementById('q').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doSearch();
+}
+ 
+// ── helpers ───────────────────────────────────────────────────────────────────
+ 
+function safeName(name) {
+  return (name ?? 'company')
+    .replace(/[^a-zA-Z0-9ÄÖÜäöüß\-_. ]/g, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 80);
+}
+ 
+async function searchAndCapture(keywords, mode, rowIndex) {
+  const c = await getClient();
+  const companies = await c.search({
+    schlagwoerter: keywords.trim(),
+    schlagwortOptionen: mode,
   });
+  if (!companies?.length) throw new Error(`No companies found for "${keywords}"`);
+  const idx = Math.max(0, Math.min(rowIndex, companies.length - 1));
+  return { companies, chosen: companies[idx], idx, page: c.page };
+}
+ 
+// ── express ───────────────────────────────────────────────────────────────────
+ 
+const app = express();
+ 
 
-  function setStatus(msg, type) {
-    const el = document.getElementById('status');
-    el.className = 'status' + (type ? ' ' + type : '');
-    if (type === 'loading') {
-      el.innerHTML = '<span class="spinner"></span>' + msg;
-    } else {
-      el.textContent = msg;
-    }
-  }
+app.use(cors({
+  origin: true,                 // akzeptiert dynamische PCF‑Origins
+  credentials: true,            // wichtig für PCF‑Sandbox
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+}));
 
-  async function doSearch() {
-    if (busy) return;
-    const q = document.getElementById('q').value.trim();
-    const mode = document.getElementById('mode').value;
-    if (!q) { document.getElementById('q').focus(); return; }
+// Preflight für alle Routen explizit erlauben
+app.options('*', cors({
+  origin: true,
+  credentials: true,
+}))
 
-    lastKeywords = q;
-    lastMode = mode;
-    companies = [];
-    busy = true;
-
-    document.getElementById('searchBtn').disabled = true;
-    setStatus('Searching — this may take 10–20 seconds', 'loading');
-    document.getElementById('results').classList.remove('visible');
-    document.getElementById('companyList').innerHTML = '';
-
-    try {
-      const resp = await fetch('/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keywords: q, mode }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error ?? 'Search failed');
-
-      companies = data.companies ?? [];
-
-      if (companies.length === 0) {
-        setStatus('No results found for "' + q + '"', 'error');
-      } else if (companies.length === 1) {
-        // Single result — download immediately
-        setStatus('Found: ' + companies[0].name + ' — downloading PDF', 'loading');
-        await triggerDownload(0);
-      } else {
-        // Multiple results — show list, click to download
-        setStatus(companies.length + ' companies found — click one to download its AD PDF', 'ok');
-        renderResults(companies);
-      }
-    } catch (err) {
-      setStatus(err.message, 'error');
-    } finally {
-      busy = false;
-      document.getElementById('searchBtn').disabled = false;
-    }
-  }
-
-  function renderResults(list) {
-    document.getElementById('resultsLabel').textContent =
-      'Click a company to download its AD PDF';
-
-    const container = document.getElementById('companyList');
-    container.innerHTML = '';
-
-    list.forEach((c, i) => {
-      const div = document.createElement('div');
-      div.className = 'company-row';
-      div.innerHTML =
-        '<span class="co-num">' + (i + 1) + '</span>' +
-        '<div class="co-name">' + esc(c.name) + '</div>' +
-        '<div class="co-detail">' +
-          esc(c.court) + '<br>' +
-          esc(c.state) +
-          (c.register_num ? ' &nbsp;&middot;&nbsp; ' + esc(c.register_num) : '') +
-          (c.statusCurrent ? ' &nbsp;&middot;&nbsp; ' + esc(c.statusCurrent) : '') +
-          (c.documents ? '<br>Documents: ' + esc(c.documents) : '') +
-        '</div>';
-      div.addEventListener('click', () => {
-        if (busy) return;
-        downloadFromList(i, div);
-      });
-      container.appendChild(div);
+ 
+app.use(express.json());
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'ui.html')));
+ 
+// ── POST /search ──────────────────────────────────────────────────────────────
+ 
+app.post('/search', async (req, res) => {
+busy = false
+ 
+  const { keywords, mode = 'all' } = req.body ?? {};
+  if (!keywords?.trim()) { busy = false; return res.status(400).json({ error: 'keywords required' }); }
+ 
+  try {
+    const companies = await withAutoRetry(async () => {
+      const c = await getClient();
+      return c.search({ schlagwoerter: keywords.trim(), schlagwortOptionen: mode });
     });
-
-    document.getElementById('results').classList.add('visible');
+    res.json({ companies: companies ?? [] });
+  } catch (err) {
+    console.error('[search]', err.message);
+    await resetClient();
+    res.status(500).json({ error: err.message });
+  } finally {
+    busy = false;
   }
-
-  async function downloadFromList(idx, rowEl) {
-    busy = true;
-    // Mark the row visually
-    document.querySelectorAll('.company-row').forEach(r => r.classList.remove('downloading'));
-    rowEl.classList.add('downloading');
-    setStatus('Downloading AD PDF for ' + companies[idx].name + ' — please wait', 'loading');
-
-    try {
-      await triggerDownload(idx);
-      setStatus('Saved: ' + companies[idx].name + '_AD.pdf', 'ok');
-    } catch (err) {
-      setStatus(err.message, 'error');
-      rowEl.classList.remove('downloading');
-    } finally {
+});
+ 
+// ── POST /download  (browser file-save) ───────────────────────────────────────
+ 
+app.post('/download', async (req, res) => {
+  if (busy) return res.status(429).json({ error: 'Another search is in progress. Please wait.' });
+  busy = true;
+ 
+  const { keywords, mode = 'all', rowIndex = 0 } = req.body ?? {};
+  if (!keywords?.trim()) { busy = false; return res.status(400).json({ error: 'keywords required' }); }
+ 
+  const tmpPath = path.join(os.tmpdir(), `hr_ad_${Date.now()}.pdf`);
+ 
+  try {
+    const { chosen, idx, page } = await withAutoRetry(() =>
+      searchAndCapture(keywords, mode, rowIndex)
+    );
+ 
+    await downloadADPdf(page, tmpPath, idx);
+ 
+    const filename = `${safeName(chosen.name)}_AD.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+ 
+    const stream = fs.createReadStream(tmpPath);
+    stream.pipe(res);
+ 
+    // Release busy and clean up ONLY after the stream is fully done —
+    // not in finally, which would fire the moment pipe() is called
+    stream.on('end', () => {
+      fs.unlink(tmpPath, () => {});
       busy = false;
-    }
-  }
-
-  async function triggerDownload(rowIndex) {
-    const resp = await fetch('/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keywords: lastKeywords, mode: lastMode, rowIndex }),
     });
-
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ error: resp.statusText }));
-      throw new Error(err.error ?? 'Download failed');
-    }
-
-    const blob = await resp.blob();
-    const cd = resp.headers.get('Content-Disposition') ?? '';
-    const match = cd.match(/filename="([^"]+)"/);
-    const filename = match ? match[1] : 'AD.pdf';
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-
-    setStatus('Saved: ' + filename, 'ok');
+    stream.on('error', (e) => {
+      console.error('[download stream]', e.message);
+      fs.unlink(tmpPath, () => {});
+      busy = false;
+      if (!res.headersSent) res.status(500).json({ error: e.message });
+    });
+    res.on('close', () => {
+      // Client disconnected early (e.g. browser cancelled download)
+      fs.unlink(tmpPath, () => {});
+      busy = false;
+    });
+  } catch (err) {
+    console.error('[download]', err.message);
+    fs.unlink(tmpPath, () => {});
+    busy = false;
+    await resetClient();
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
-
-  function esc(s) {
-    return (s ?? '')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+});
+ 
+// ── POST /download-pdf  (base64 — for PCF) ───────────────────────────────────
+ 
+app.post('/download-pdf', async (req, res) => {
+  if (busy) return res.status(429).json({ error: 'Another search is in progress. Please wait.' });
+  busy = true;
+ 
+  const { keywords, mode = 'all', rowIndex = 0 } = req.body ?? {};
+  if (!keywords?.trim()) { busy = false; return res.status(400).json({ error: 'keywords required' }); }
+ 
+  const tmpPath = path.join(os.tmpdir(), `hr_ad_${Date.now()}.pdf`);
+ 
+  try {
+    const { companies, chosen, idx, page } = await withAutoRetry(() =>
+      searchAndCapture(keywords, mode, rowIndex)
+    );
+ 
+    await downloadADPdf(page, tmpPath, idx);
+ 
+    // Read file into memory first, THEN delete temp file
+    const base64 = fs.readFileSync(tmpPath).toString('base64');
+    fs.unlink(tmpPath, () => {});
+ 
+    res.json({
+      filename: `${safeName(chosen.name)}_AD.pdf`,
+      mimeType: 'application/pdf',
+      base64,
+      company: {
+        name:          chosen.name,
+        court:         chosen.court,
+        register_num:  chosen.register_num,
+        state:         chosen.state,
+        statusCurrent: chosen.statusCurrent,
+      },
+      totalResults: companies.length,
+    });
+  } catch (err) {
+    console.error('[download-pdf]', err.message);
+    fs.unlink(tmpPath, () => {});
+    await resetClient();
+    res.status(500).json({ error: err.message });
+  } finally {
+    busy = false;
   }
-</script>
-</body>
-</html>
+});
+ 
+// ── start ─────────────────────────────────────────────────────────────────────
+ 
+app.listen(PORT, () => {
+  console.log(`\n  Handelsregister server    →  http://localhost:${PORT}`);
+  console.log(`  Web UI                    →  http://localhost:${PORT}/`);
+  console.log(`  PCF endpoint              →  POST http://localhost:${PORT}/download-pdf\n`);
+});
+ 
+process.on('SIGINT', async () => { await resetClient(); process.exit(0); });
